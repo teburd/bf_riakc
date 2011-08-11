@@ -3,11 +3,22 @@
 %% @doc Riak Client Pool API.
 
 -module(bf_riakc).
--export([execute/1, delete/2, get/2, list_keys/1, put/3]).
+-export([start_link/4, stop/1, execute/2, delete/3, get/3, list_keys/2, put/4]).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
+
+%% @doc Start a linked connection pool (supervisor).
+-spec start_link(atom(), pos_integer(), string(), pos_integer()) -> {ok, pid()}.
+start_link(Name, Connections, Host, Port) ->
+    hottub:start_link(Name, Connections,
+        riakc_pb_socket, start_link, [Host, Port]).
+
+%% @doc Stop a connection pool.
+-spec stop(atom()) -> ok.
+stop(Name) ->
+    hottub:stop(Name).
 
 %% @doc Finds the next available connection pid from the pool and calls
 %% `Fun(Pid)'. Returns `{ok, Value}' if the call was successful, and
@@ -17,20 +28,21 @@
 %% > bf_riakc:execute(fun(C) -> riakc_pb_socket:ping(C) end).
 %% {ok,pong}
 %% '''
--spec execute(Fun::fun((Connection::pid()) -> Result::any())) -> Result::any(). 
-execute(Fun) ->
-    hottub:execute(bf_riakc, Fun).
+-spec execute(atom(), fun((pid()) -> any())) -> any(). 
+execute(Name, Fun) ->
+    hottub:execute(Name, Fun).
  
 %% @doc Delete `Key' from `Bucket'.
--spec delete(binary(), binary()) -> ok.
-delete(Bucket, Key) ->
-    execute(fun(C) -> riakc_pb_socket:delete(C, Bucket, Key) end).
+-spec delete(atom(), binary(), binary()) -> ok.
+delete(Name, Bucket, Key) ->
+    Fun = fun(C) -> riakc_pb_socket:delete(C, Bucket, Key) end,
+    execute(Name, Fun).
 
 %% @doc Returns the value associated with `Key' in `Bucket' as `{ok, binary()}'.
 %% If an error was encountered or the value was not present, returns
 %% `{error, any()}'.
--spec get(binary(), binary()) -> {ok, binary()} | {error, any()}.
-get(Bucket, Key) ->
+-spec get(atom(), binary(), binary()) -> {ok, binary()} | {error, any()}.
+get(Name, Bucket, Key) ->
     Fun =
         fun(C) ->
             case riakc_pb_socket:get(C, Bucket, Key) of
@@ -38,19 +50,19 @@ get(Bucket, Key) ->
                 {error, E} -> {error, E}
             end
         end,
-    execute(Fun).
+    execute(Name, Fun).
 
 %% @doc Returns the list of keys in `Bucket' as `{ok, list()}'. If an error was
 %% encountered, returns `{error, any()}'.
--spec list_keys(binary()) -> {ok, list()} | {error, any()}.
-list_keys(Bucket) ->
+-spec list_keys(atom(), binary()) -> {ok, list()} | {error, any()}.
+list_keys(Name, Bucket) ->
     Fun = fun(C) -> riakc_pb_socket:list_keys(C, Bucket) end,
-    execute(Fun).
+    execute(Name, Fun).
 
 %% @doc Associates `Key' with `Value' in `Bucket'. If `Key' already exists in
 %% `Bucket', an update will be preformed.
--spec put(binary(), binary(), binary()) -> ok.
-put(Bucket, Key, Value) ->
+-spec put(atom(), binary(), binary(), binary()) -> ok.
+put(Name, Bucket, Key, Value) ->
     Fun =
         fun(C) ->
             case riakc_pb_socket:get(C, Bucket, Key) of
@@ -62,7 +74,7 @@ put(Bucket, Key, Value) ->
                     riakc_pb_socket:put(C, O)
             end
         end,
-    execute(Fun),
+    execute(Name, Fun),
     ok.
 
 -ifdef(TEST).
@@ -78,24 +90,24 @@ ensure_started(App) ->
 
 bf_riakc_test_() ->
     {setup,
-        fun() -> ensure_started(bf_riakc), ok end,
-        fun(_) -> ok end,
+        fun() -> start_link(test_db, 8, "localhost", 8081), ok end,
+        fun(_) -> stop(test_db), ok end,
         [fun basics/0]}.
 
 basics() ->
     PingFun = fun(C) -> riakc_pb_socket:ping(C) end,
     N0 = <<"_never_exists">>,
     {B, K, V1, V2} = {<<"groceries">>, <<"mine">>, <<"eggs">>, <<"toast">>},
-    ?assertEqual(pong, execute(PingFun)),
-    ?assertEqual(ok, delete(B, K)),
-    ?assertMatch({ok, []}, list_keys(N0)),
-    ?assertMatch({error, _}, get(N0, N0)),
-    ?assertEqual(ok, put(B, K, V1)),
-    ?assertEqual(V1, get(B, K)),
-    ?assertEqual(ok, put(B, K, V2)),
-    ?assertEqual(V2, get(B, K)),
-    ?assertEqual({ok, [K]}, list_keys(B)),
-    ?assertEqual(ok, delete(B, K)),
-    ?assertEqual({ok, []}, list_keys(B)).
+    ?assertEqual(pong, execute(test_db, PingFun)),
+    ?assertEqual(ok, delete(test_db, B, K)),
+    ?assertMatch({ok, []}, list_keys(test_db, N0)),
+    ?assertMatch({error, _}, get(test_db, N0, N0)),
+    ?assertEqual(ok, put(test_db, B, K, V1)),
+    ?assertEqual(V1, get(test_db, B, K)),
+    ?assertEqual(ok, put(test_db, B, K, V2)),
+    ?assertEqual(V2, get(test_db, B, K)),
+    ?assertEqual({ok, [K]}, list_keys(test_db, B)),
+    ?assertEqual(ok, delete(test_db, B, K)),
+    ?assertEqual({ok, []}, list_keys(test_db, B)).
 
 -endif.
