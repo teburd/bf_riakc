@@ -1,0 +1,7 @@
+{application, bf_riakc,
+ [{description, "bf_riakc"},
+  {vsn, "0.1"},
+  {registered, []},
+  {applications, [kernel, stdlib]},
+  {mod, {bf_riakc_app, []}},
+  {env, []}]}.
